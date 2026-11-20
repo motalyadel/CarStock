@@ -1,23 +1,43 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/theme/app_theme.dart';
+import 'core/routing/app_navigator.dart';
+
+import 'providers/auth_provider.dart';
+import 'providers/car_provider.dart';
+import 'providers/customer_provider.dart';
+import 'providers/followup_provider.dart';
+
+import 'features/auth/login/login_page.dart';
+import 'features/auth/register/register_page.dart';
+import 'features/admin/dashboard/admin_dashboard_page.dart';
+import 'features/client/home/client_home_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment variables
   await dotenv.load(fileName: 'assets/.env');
 
-  // Initialize Supabase
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
     publishableKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
-  runApp(const CarStockApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => CarProvider()),
+        ChangeNotifierProvider(create: (_) => CustomerProvider()),
+        ChangeNotifierProvider(create: (_) => FollowUpProvider()),
+      ],
+      child: const CarStockApp(),
+    ),
+  );
 }
 
 class CarStockApp extends StatelessWidget {
@@ -28,47 +48,19 @@ class CarStockApp extends StatelessWidget {
     return MaterialApp(
       title: 'CarStock',
       debugShowCheckedModeBanner: false,
+
       theme: AppTheme.lightTheme,
-      home: const SetupPage(),
-    );
-  }
-}
 
-class SetupPage extends StatelessWidget {
-  const SetupPage({super.key});
+      navigatorKey: AppNavigator.globalKey,
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.directions_car,
-              size: 80,
-              color: Colors.blue,
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'CarStock',
-              style: TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Supabase initialized successfully',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.green,
-              ),
-            ),
-          ],
-        ),
-      ),
+      initialRoute: '/login',
+
+      routes: {
+        '/login': (context) => const LoginPage(),
+        '/register': (context) => const RegisterPage(),
+        '/admin': (context) => const AdminDashboardPage(),
+        '/client': (context) => const ClientHomePage(),
+      },
     );
   }
 }
