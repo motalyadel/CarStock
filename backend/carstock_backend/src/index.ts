@@ -16,120 +16,17 @@ const supabasePublic = createClient(supabaseUrl, supabaseKey, {
   },
 });
 
-const supabaseAdmin = createClient(supabaseUrl, supabaseRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
-
-// ======================================================
-// Fonction commune : création d'un compte client
-// ======================================================
-async function createClientAccount(input: {
-  email: string;
-  password: string;
-  name: string;
-  contact?: string | null;
-  details?: string | null;
-  start_date?: string | null;
-  photo?: File;
-}) {
-  const { email, password, name, contact, details, start_date, photo } = input;
-
-  // 1. Création du compte Auth (envoie l'e-mail de confirmation)
-  const { data: authData, error: signUpError } =
-    await supabasePublic.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { name },
-      },
-    });
-
-  if (signUpError) {
-    throw new Error(signUpError.message);
+const supabaseAdmin = createClient(
+  supabaseUrl,
+  supabaseRoleKey,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
   }
+);
 
-  const user = authData.user;
-
-  // Cas e-mail déjà utilisé
-  if (!user || (user.identities && user.identities.length === 0)) {
-    throw new Error("Cette adresse e-mail est déjà utilisée.");
-  }
-
-  const userId = user.id;
-
-  try {
-    // 2. Upload photo (optionnel)
-    let photoUrl: string | null = null;
-
-    if (photo) {
-      const photoPath = `client/${userId}/${Date.now()}.jpg`;
-
-      const { error: uploadError } = await supabaseAdmin.storage
-        .from("avatars")
-        .upload(photoPath, photo, {
-          contentType: photo.type || "image/jpeg",
-          upsert: true,
-        });
-
-      if (uploadError) {
-        throw new Error(`Échec upload photo : ${uploadError.message}`);
-      }
-
-      photoUrl = supabaseAdmin.storage
-        .from("avatars")
-        .getPublicUrl(photoPath).data.publicUrl;
-    }
-
-    // 3. Insertion public.users
-    const { error: userError } = await supabaseAdmin.from("users").insert({
-      id: userId,
-      email,
-      name,
-    });
-
-    if (userError) throw new Error(`Erreur users : ${userError.message}`);
-
-    // 4. Insertion public.client
-    const { error: clientError } = await supabaseAdmin.from("client").insert({
-      id: userId,
-      contact: contact ?? null,
-      details: details ?? null,
-      photo: photoUrl,
-      start_date: start_date ?? null,
-    });
-
-    if (clientError) throw new Error(`Erreur client : ${clientError.message}`);
-
-    // 5. Attribution du rôle client
-    const { error: roleError } = await supabaseAdmin.from("user_roles").insert({
-      user_id: userId,
-      role_id: "client",
-    });
-
-    if (roleError) throw new Error(`Erreur rôle : ${roleError.message}`);
-
-    return {
-      id: userId,
-      email,
-      name,
-      contact,
-      details,
-      photo: photoUrl,
-      start_date,
-    };
-  } catch (err) {
-    // Nettoyage en cas d'échec
-    try {
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-    } catch (e) {
-      console.error("Échec nettoyage compte Auth:", e);
-    }
-    throw err;
-  }
-}
 
 // ======================================================
 // Application
@@ -188,54 +85,192 @@ const app = new Elysia()
   // ----------------------------------------------------
   // INSCRIPTION PUBLIQUE
   // ----------------------------------------------------
-  .post(
-    "/api/v1/auth/register",
-    async ({ body, set }) => {
-      try {
-        const client = await createClientAccount(body);
+  // ======================================================
+// INSCRIPTION PUBLIQUE CLIENT
+// ======================================================
 
-        set.status = 201;
-        return {
-          success: true,
-          message:
-            "Compte créé avec succès. Vérifiez votre e-mail pour confirmer l'inscription.",
-          data: client,
-        };
-      } catch (err: any) {
+.post(
+  "/api/v1/auth/register",
+  async ({ body, set }) => {
+    const {
+      email,
+      password,
+      name,
+      contact,
+      details,
+      start_date,
+      photo,
+    } = body;
+
+    let userId: string | null = null;
+    let photoPath: string | null = null;
+
+    try {
+      // 1. Create user in Supabase Auth
+      const { data: createdUser, error } =
+        await supabaseAdmin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true, // compte immédiatement confirmé
+          user_metadata: {
+            name,
+            roles: ["client"],
+            status: "active",
+          },
+        });
+
+      if (error || !createdUser.user?.id) {
         set.status = 400;
         return {
           success: false,
-          message: err.message || "Erreur lors de la création du compte.",
+          message: error?.message ?? "Failed to create user",
         };
       }
-    },
-    {
-      body: t.Object({
-        email: t.String({ format: "email" }),
-        password: t.String({ minLength: 8 }),
-        name: t.String({ minLength: 2 }),
-        contact: t.Optional(t.Nullable(t.String())),
-        details: t.Optional(t.Nullable(t.String())),
-        start_date: t.Optional(t.Nullable(t.String())),
-        photo: t.Optional(t.File()),
-      }),
+
+      userId = createdUser.user.id;
+
+      // 2. Upload photo (optionnel)
+      let photoUrl: string | null = null;
+
+      if (photo) {
+        photoPath = `client/${userId}/${Date.now()}.jpg`;
+
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from("avatars")
+          .upload(photoPath, photo, {
+            contentType: photo.type || "image/jpeg",
+            upsert: true,
+          });
+
+        if (uploadError) {
+          throw new Error(`Failed to upload photo: ${uploadError.message}`);
+        }
+
+        photoUrl = supabaseAdmin.storage
+          .from("avatars")
+          .getPublicUrl(photoPath).data.publicUrl;
+      }
+
+      // 3. Insert into public.users
+      const { error: userError } = await supabaseAdmin.from("users").insert({
+        id: userId,
+        email,
+        name,
+        status: "active",
+      });
+
+      if (userError) {
+        throw new Error(`Users insertion: ${userError.message}`);
+      }
+
+      // 4. Insert into public.client
+      const { error: clientError } = await supabaseAdmin.from("client").insert({
+        id: userId,
+        contact: contact ?? null,
+        details: details ?? null,
+        photo: photoUrl,
+        start_date: start_date ?? new Date().toISOString().split("T")[0],
+      });
+
+      if (clientError) {
+        throw new Error(`Client insertion: ${clientError.message}`);
+      }
+
+      // 5. Assign client role
+      const { error: roleError } = await supabaseAdmin
+        .from("user_roles")
+        .insert({
+          user_id: userId,
+          role_id: "client",
+        });
+
+      if (roleError) {
+        throw new Error(`Role insertion: ${roleError.message}`);
+      }
+
+      // 6. Success
+      set.status = 201;
+      return {
+        success: true,
+        message: "Client registered successfully.",
+        user: {
+          id: userId,
+          email,
+          name,
+          contact,
+          details,
+          photo: photoUrl,
+          role: "client",
+          status: "active",
+        },
+      };
+    } catch (error) {
+      console.error("❌ REGISTER ERROR:", error);
+
+      // Cleanup photo
+      if (photoPath) {
+        await supabaseAdmin.storage.from("avatars").remove([photoPath]);
+      }
+
+      // Cleanup Auth user
+      if (userId) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+      }
+
+      set.status = 400;
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
-  )
+  },
+  {
+    body: t.Object({
+      email: t.String({ format: "email" }),
+      password: t.String({ minLength: 8 }),
+      name: t.String({ minLength: 2 }),
+      contact: t.Optional(t.Nullable(t.String())),
+      details: t.Optional(t.Nullable(t.String())),
+      start_date: t.Optional(t.Nullable(t.String())),
+      photo: t.Optional(t.File()),
+    }),
+  }
+)
 
   // ----------------------------------------------------
   // CRÉATION CLIENT PAR ADMIN
   // ----------------------------------------------------
-  .post(
-    "/api/v1/users/client",
-    async ({ body, headers, set }) => {
-      const authorization = headers.authorization;
+  // ======================================================
+// CRÉATION CLIENT PAR ADMIN
+// ======================================================
 
-      if (!authorization?.startsWith("Bearer ")) {
+.post(
+  "/api/v1/users/client",
+  async ({ body, headers, set }) => {
+    const {
+      email,
+      password,
+      name,
+      contact,
+      details,
+      start_date,
+      photo,
+    } = body;
+
+    let userId: string | null = null;
+    let photoPath: string | null = null;
+
+    try {
+      // 1. Verify authorization token
+      const token = headers.authorization?.replace("Bearer ", "");
+
+      if (!token) {
         set.status = 401;
-        return { success: false, message: "Token manquant." };
+        return {
+          success: false,
+          message: "Authorization token missing.",
+        };
       }
-
-      const token = authorization.substring(7);
 
       const {
         data: { user: currentUser },
@@ -244,55 +279,166 @@ const app = new Elysia()
 
       if (authError || !currentUser) {
         set.status = 401;
-        return { success: false, message: "Session invalide ou expirée." };
+        return {
+          success: false,
+          message: "Invalid or expired session.",
+        };
       }
 
-      // Vérification rôle admin dans user_roles
-      const { data: adminRole, error: roleError } = await supabaseAdmin
-        .from("user_roles")
-        .select("user_id")
-        .eq("user_id", currentUser.id)
-        .eq("role_id", "admin")
-        .maybeSingle();
+      // 2. Verify admin role
+      const { data: adminRole, error: roleCheckError } =
+        await supabaseAdmin
+          .from("user_roles")
+          .select("user_id")
+          .eq("user_id", currentUser.id)
+          .eq("role_id", "admin")
+          .maybeSingle();
 
-      if (roleError || !adminRole) {
+      if (roleCheckError || !adminRole) {
         set.status = 403;
         return {
           success: false,
-          message: "Accès réservé aux administrateurs.",
+          message: "Access reserved for administrators.",
         };
       }
 
-      try {
-        const client = await createClientAccount(body);
+      // 3. Create Auth user
+      const { data: createdUser, error } =
+        await supabaseAdmin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: {
+            name,
+            roles: ["client"],
+            status: "active",
+          },
+        });
 
-        set.status = 201;
-        return {
-          success: true,
-          message: "Client créé avec succès. Un e-mail de confirmation a été envoyé.",
-          data: client,
-        };
-      } catch (err: any) {
+      if (error || !createdUser.user?.id) {
         set.status = 400;
         return {
           success: false,
-          message: err.message || "Erreur lors de la création du client.",
+          message: error?.message ?? "Failed to create client.",
         };
       }
-    },
-    {
-      body: t.Object({
-        email: t.String({ format: "email" }),
-        password: t.String({ minLength: 8 }),
-        name: t.String({ minLength: 2 }),
-        contact: t.Optional(t.Nullable(t.String())),
-        details: t.Optional(t.Nullable(t.String())),
-        start_date: t.Optional(t.Nullable(t.String())),
-        photo: t.Optional(t.File()),
-      }),
-    }
-  )
 
+      userId = createdUser.user.id;
+
+      // 4. Upload photo
+      let photoUrl: string | null = null;
+
+      if (photo) {
+        photoPath = `client/${userId}/${Date.now()}.jpg`;
+
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from("avatars")
+          .upload(photoPath, photo, {
+            contentType: photo.type || "image/jpeg",
+            upsert: true,
+          });
+
+        if (uploadError) {
+          throw new Error(
+            `Photo upload failed: ${uploadError.message}`
+          );
+        }
+
+        photoUrl = supabaseAdmin.storage
+          .from("avatars")
+          .getPublicUrl(photoPath).data.publicUrl;
+      }
+
+      // 5. Insert public.users
+      const { error: userError } = await supabaseAdmin
+        .from("users")
+        .insert({
+          id: userId,
+          email,
+          name,
+          status: "active",
+        });
+
+      if (userError) {
+        throw new Error(`Users insertion: ${userError.message}`);
+      }
+
+      // 6. Insert public.client
+      const { error: clientError } = await supabaseAdmin
+        .from("client")
+        .insert({
+          id: userId,
+          contact: contact ?? null,
+          details: details ?? null,
+          photo: photoUrl,
+          start_date: start_date ?? new Date().toISOString().split("T")[0],
+        });
+
+      if (clientError) {
+        throw new Error(`Client insertion: ${clientError.message}`);
+      }
+
+      // 7. Assign client role
+      const { error: insertRoleError } = await supabaseAdmin
+        .from("user_roles")
+        .insert({
+          user_id: userId,
+          role_id: "client",
+        });
+
+      if (insertRoleError) {
+        throw new Error(`Role insertion: ${insertRoleError.message}`);
+      }
+
+      // 8. Success
+      return {
+        success: true,
+        message: "Client created successfully.",
+        user: {
+          id: userId,
+          email,
+          name,
+          contact,
+          details,
+          photo: photoUrl,
+          role: "client",
+          status: "active",
+        },
+      };
+
+    } catch (err: any) {
+      console.error("Admin client creation error:", err);
+
+      if (photoPath) {
+        await supabaseAdmin.storage
+          .from("avatars")
+          .remove([photoPath]);
+      }
+
+      if (userId) {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+      }
+
+      set.status = 400;
+
+      return {
+        success: false,
+        message: err.message || "Client creation failed.",
+      };
+    }
+  },
+  {
+    body: t.Object({
+      email: t.String({ format: "email" }),
+      password: t.String({ minLength: 8 }),
+      name: t.String({ minLength: 2 }),
+      contact: t.Optional(t.Nullable(t.String())),
+      details: t.Optional(t.Nullable(t.String())),
+      start_date: t.Optional(t.Nullable(t.String())),
+      photo: t.Optional(t.File()),
+    }),
+  }
+)
   // ----------------------------------------------------
   // ROUTES VOITURES
   // ----------------------------------------------------

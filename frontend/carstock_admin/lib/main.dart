@@ -1,4 +1,6 @@
 
+import 'package:carstock_admin/features/admin/home/admin_home_page.dart';
+import 'package:carstock_admin/features/auth/splash/splash_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
@@ -14,7 +16,7 @@ import 'providers/followup_provider.dart';
 
 import 'features/auth/login/login_page.dart';
 import 'features/auth/register/register_page.dart';
-import 'features/admin/dashboard/admin_dashboard_page.dart';
+import 'features/admin/dashboard/dashboard_page.dart';
 import 'features/client/home/client_home_page.dart';
 
 Future<void> main() async {
@@ -56,10 +58,12 @@ class CarStockApp extends StatelessWidget {
       initialRoute: '/login',
 
       routes: {
+        '/': (_) => const SplashScreen(),
         '/login': (context) => const LoginPage(),
-        '/register': (context) => const RegisterPage(),
-        '/admin': (context) => const AdminDashboardPage(),
-        '/client': (context) => const ClientHomePage(),
+        '/signup': (context) => const RegisterPage(),
+        '/admin_home': (context) => const AdminHomePage(),
+        '/client_home': (context) => const ClientHomePage(),
+        '/admin_dashboard_': (context) => const DashboardPage(),
       },
     );
   }
